@@ -16,6 +16,7 @@ from torch.autograd import Variable
 from dataProc import readData
 from models import Pointseg
 import torch.nn.functional as F
+from datasets import PartDataset
 
 
 #set basic cons_parameter
@@ -50,13 +51,14 @@ device = torch.device("cuda:0" if opt.cuda else "cpu")
 
 blue = lambda x:'\033[94m' + x + '\033[0m'
 
-trainDataset = readData(datafolder='../firstcharm/shapenetcore_partanno_segmentation_benchmark_v0', npoints=opt.numPoints);
+#trainDataset = readData(datafolder='../pointnet.pytorch/shapenetcore_partanno_segmentation_benchmark_v0', npoints=opt.numPoints);
+trainDataset = PartDataset(root = '../pointnet.pytorch/shapenetcore_partanno_segmentation_benchmark_v0', classification = False, class_choice = ['Chair'])
 assert trainDataset
 
 trainDataLoader = torch.utils.data.DataLoader(trainDataset, batch_size=opt.batchSize,
                                               shuffle=True, num_workers=int(opt.workers))
-
-testDataset = readData(datafolder='../firstcharm/shapenetcore_partanno_segmentation_benchmark_v0', train= False);
+testDataset = PartDataset(root = '../pointnet.pytorch/shapenetcore_partanno_segmentation_benchmark_v0', classification = False, class_choice = ['Chair'], train = False)
+#testDataset = readData(datafolder='../pointnet.pytorch/shapenetcore_partanno_segmentation_benchmark_v0', train= False);
 assert testDataset
 
 TestDataLoader = torch.utils.data.DataLoader(testDataset, batch_size=opt.batchSize,
@@ -77,7 +79,7 @@ segmentor = Pointseg(opt.numPoints, 4).to(device)
 if opt.model != '':
     Pointseg.load_state_dict(torch.load(opt.model))
 
-optimizer = optim.SGD(segmentor.parameters(), lr=0.01, momentum=0.9)
+optimizer = optim.SGD(segmentor.parameters(), lr=0.05, momentum=0.9)
 #classifier.cuda()
 #loss = nn.NLLLoss()  #F.nll_loss()
 
@@ -92,11 +94,13 @@ for epoch in range(opt.nepoch):
 
 
         points = points.transpose(2, 1)
-
+        segmentor.zero_grad()
         optimizer.zero_grad()
+        segmentor = segmentor.train()
         output = segmentor(points)
         #target = target -1
         output = output.transpose(2, 1).contiguous().view(-1,4)
+        output = F.softmax(output)
         target = target.view(-1, 1)[:, 0] - 1
         #print(output.size(), target.size())
 
@@ -115,9 +119,11 @@ for epoch in range(opt.nepoch):
             points, target = points.to(device), target.to(device)
             points = points.transpose(2, 1)
 
-
+            #segmentor = segmentor.train()
+            segmentor = segmentor.eval()
             output = segmentor(points)
             output = output.transpose(2, 1).contiguous().view(-1,4)
+            output = F.softmax(output)
             target = target.view(-1, 1)[:,0] - 1
 
             error = F.nll_loss(output, target)
@@ -125,4 +131,4 @@ for epoch in range(opt.nepoch):
             pred_choice = output.data.max(1)[1]
             correct = pred_choice.eq(target.data).cpu().sum()
             print('[%d: %d/%d] %s loss: %f accuracy: %f' %(epoch, i, num_batch, blue('test'), error.item(), correct.item()/float(opt.batchSize * 2500)))
-    torch.save(Pointseg.state_dict(), '%s/seg_model_%d.pth' % (opt.outf, epoch))
+    torch.save(segmentor.state_dict(), '%s/seg_model_%d.pth' % (opt.outf, epoch))
